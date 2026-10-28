@@ -13,9 +13,9 @@
         input_dir   Folder holding the .nessus files. Defaults to the folder
                     the script lives in, so dropping the script next to the
                     files and double-clicking it works.
-        output_csv  Where to write the CSV. Defaults to
-                    %TEMP%\nessus_file.csv, mirroring the original's
-                    /tmp/nessus_file.csv.
+        output_csv  Where to write the CSV. Defaults to nessus_file.csv on
+                    the current user's Desktop (the original wrote to
+                    /tmp/nessus_file.csv).
         /quiet      Skip the summary message box at the end.
 
     Requires only a stock AutoIt install; XML parsing uses the MSXML COM
@@ -26,7 +26,7 @@
 #include <MsgBoxConstants.au3>
 
 Global $g_sInputDir = @ScriptDir
-Global $g_sOutputFile = @TempDir & "\nessus_file.csv"
+Global $g_sOutputFile = @DesktopDir & "\nessus_file.csv"
 Global $g_bQuiet = False
 Global $g_iComError = 0
 

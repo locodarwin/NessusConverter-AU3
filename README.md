@@ -12,7 +12,7 @@ CSV file you can open in Excel, with one row per finding:
 
 Drop `nessus_to_csv.au3` into the folder that holds your `.nessus` files and
 double-click it. When the summary box appears, the CSV is at
-`%TEMP%\nessus_file.csv`.
+`nessus_file.csv` on your Desktop.
 
 From a command prompt you can point it elsewhere:
 
@@ -21,7 +21,7 @@ AutoIt3.exe nessus_to_csv.au3 [input_dir] [output_csv] [/quiet]
 ```
 
 - `input_dir` – folder containing the `.nessus` files (default: the script's own folder)
-- `output_csv` – path of the CSV to write (default: `%TEMP%\nessus_file.csv`)
+- `output_csv` – path of the CSV to write (default: `nessus_file.csv` on the current user's Desktop)
 - `/quiet` – do not show the summary message box
 
 Compiled with Aut2Exe the script becomes a console program, so progress and the
@@ -35,7 +35,7 @@ summary also print to the command prompt.
 ## Notes on the port
 
 - The original Python wrote to `/tmp/nessus_file.csv`; this writes to the
-  Windows temp folder by default and accepts an output path argument.
+  current user's Desktop by default and accepts an output path argument.
 - The original paired host names with findings by list index, so a host with
   several findings came out with only one row and the rest were attributed to
   the wrong hosts. This port walks each `ReportHost` and emits every
