@@ -115,25 +115,57 @@ Func _ConvertFile($sPath, $hCsv)
     Local $iRows = 0
     Local $oHosts = $oXml.selectNodes("//ReportHost")
     If Not IsObj($oHosts) Then Return 0
+    Local $bWarned = False
     For $oHost In $oHosts
-        Local $sIp = _Attr($oHost, "name")
+        Local $sIp = _NodeValue($oHost, "name", "HostProperties/tag[@name='host-ip']")
         Local $oItems = $oHost.selectNodes("ReportItem")
         If Not IsObj($oItems) Then ContinueLoop
         For $oItem In $oItems
+            Local $sPlugin = _NodeValue($oItem, "pluginName", "plugin_name")
+            If $sPlugin = "" And Not $bWarned Then
+                $bWarned = True
+                ConsoleWrite("  Warning: a ReportItem has no plugin name. Its attributes are: " & _
+                        _AttrNames($oItem) & @CRLF)
+            EndIf
             FileWriteLine($hCsv, _CsvField($sIp) & "," & _
-                    _CsvField(_Attr($oItem, "pluginName")) & "," & _
-                    _CsvField(_Attr($oItem, "severity")))
+                    _CsvField($sPlugin) & "," & _
+                    _CsvField(_NodeValue($oItem, "severity")))
             $iRows += 1
         Next
     Next
     Return $iRows
 EndFunc
 
+; Reads a value from a node: the attribute first, then a child element with
+; the same name, then one at the alternate XPath. "" when none is present.
+Func _NodeValue($oNode, $sAttr, $sAltPath = "")
+    Local $sValue = _Attr($oNode, $sAttr)
+    If $sValue <> "" Then Return $sValue
+    Local $oChild = $oNode.selectSingleNode($sAttr)
+    If Not IsObj($oChild) And $sAltPath <> "" Then $oChild = $oNode.selectSingleNode($sAltPath)
+    If IsObj($oChild) Then Return StringStripWS(String($oChild.text), 3)
+    Return ""
+EndFunc
+
+; Space-separated list of an element's attribute names, for diagnostics.
+Func _AttrNames($oNode)
+    Local $sList = ""
+    For $oAttr In $oNode.attributes
+        $sList &= $oAttr.name & " "
+    Next
+    If $sList = "" Then Return "(none)"
+    Return StringStripWS($sList, 2)
+EndFunc
+
 ; Reads an attribute as a string, "" when it is absent.
 Func _Attr($oNode, $sName)
     Local $vValue = $oNode.getAttribute($sName)
-    If Not IsString($vValue) Then Return ""
-    Return $vValue
+    If IsString($vValue) Or IsNumber($vValue) Then Return String($vValue)
+    ; Some MSXML/AutoIt pairings hand back a variant AutoIt cannot type;
+    ; go through the attribute collection instead.
+    Local $oAttr = $oNode.attributes.getNamedItem($sName)
+    If IsObj($oAttr) Then Return String($oAttr.text)
+    Return ""
 EndFunc
 
 ; Quotes a field when it holds a comma, quote or line break, per RFC 4180.
