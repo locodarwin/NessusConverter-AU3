@@ -23,6 +23,8 @@ AutoIt3.exe nessus_to_csv.au3 [input_dir] [output_csv] [/quiet]
 - `input_dir` – folder containing the `.nessus` files (default: the script's own folder)
 - `output_csv` – path of the CSV to write (default: `nessus_file.csv` on the current user's Desktop)
 - `/quiet` – do not show the summary message box
+- `/debug` – also write the raw XML of the first finding in each file to
+  `nessus_debug.txt` beside the CSV, useful when a column comes out wrong
 
 Compiled with Aut2Exe the script becomes a console program, so progress and the
 summary also print to the command prompt.
@@ -44,8 +46,9 @@ summary also print to the command prompt.
   name attribute, which is often a hostname rather than an address.
 - In a compliance scan every result is filed under a single plugin such as
   "Unix Compliance Checks", so the plugin name tells you nothing. For those
-  items the vulnerability column holds the individual check name from the
-  `cm:compliance-check-name` element instead.
+  items the vulnerability column holds the individual check name, taken from
+  the `cm:compliance-check-name` element or, failing that, the quoted title
+  that opens the item's `description`.
 - Fields containing commas, quotes or line breaks are quoted per RFC 4180.
 - Files that fail to parse are skipped with a note on the console; the rest of
   the folder is still converted.

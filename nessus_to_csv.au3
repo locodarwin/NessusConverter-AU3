@@ -17,6 +17,9 @@
                     the current user's Desktop (the original wrote to
                     /tmp/nessus_file.csv).
         /quiet      Skip the summary message box at the end.
+        /debug      Also write the raw XML of the first finding in each
+                    file to nessus_debug.txt beside the CSV, to help work
+                    out where a given export keeps its fields.
 
     Requires only a stock AutoIt install; XML parsing uses the MSXML COM
     object that ships with Windows.
@@ -28,6 +31,7 @@
 Global $g_sInputDir = @ScriptDir
 Global $g_sOutputFile = @DesktopDir & "\nessus_file.csv"
 Global $g_bQuiet = False
+Global $g_bDebug = False
 Global $g_iComError = 0
 
 _ParseCommandLine()
@@ -39,6 +43,8 @@ Func _ParseCommandLine()
         Local $sArg = $CmdLine[$i]
         If $sArg = "/quiet" Or $sArg = "/q" Then
             $g_bQuiet = True
+        ElseIf $sArg = "/debug" Then
+            $g_bDebug = True
         Else
             $iPositional += 1
             If $iPositional = 1 Then $g_sInputDir = $sArg
@@ -103,6 +109,7 @@ Func _ConvertFile($sPath, $hCsv)
     $oXml.validateOnParse = False
     $oXml.resolveExternals = False
     $oXml.setProperty("SelectionLanguage", "XPath")
+    $oXml.setProperty("SelectionNamespaces", "xmlns:cm='http://www.nessus.org/cm'")
 
     $g_iComError = 0
     If Not $oXml.load($sPath) Or $g_iComError Then
@@ -126,7 +133,10 @@ Func _ConvertFile($sPath, $hCsv)
             ; Compliance scans file every result under one plugin ("Unix
             ; Compliance Checks" and the like); the useful name is the
             ; individual check, held in a cm:compliance-check-name child.
-            Local $sPlugin = _ChildText($oItem, "*[local-name()='compliance-check-name']")
+            If $g_bDebug And $iRows = 0 Then _DebugDump($sPath, $oItem)
+            Local $sPlugin = _ChildText($oItem, "cm:compliance-check-name")
+            If $sPlugin = "" Then $sPlugin = _ChildText($oItem, "*[local-name()='compliance-check-name']")
+            If $sPlugin = "" Then $sPlugin = _DescriptionTitle(_ChildText($oItem, "description"))
             If $sPlugin = "" Then $sPlugin = _NodeValue($oItem, "pluginName", "plugin_name")
             If $sPlugin = "" And Not $bWarned Then
                 $bWarned = True
@@ -156,6 +166,26 @@ Func _ChildText($oNode, $sPath)
     Local $oChild = $oNode.selectSingleNode($sPath)
     If Not IsObj($oChild) Then Return ""
     Return StringStripWS(String($oChild.text), 3)
+EndFunc
+
+; Compliance descriptions open with the check title in quotes, as in
+; "1.1.1 Ensure ..." : [FAILED] ...   Returns that title, or "".
+Func _DescriptionTitle($sDescription)
+    Local $aMatch = StringRegExp($sDescription, '^\s*"([^"]+)"\s*:', 1)
+    If @error Then Return ""
+    Return StringStripWS($aMatch[0], 3)
+EndFunc
+
+; Appends the raw XML of one ReportItem to nessus_debug.txt beside the CSV.
+Func _DebugDump($sPath, $oItem)
+    Local $sDebugFile = StringRegExpReplace($g_sOutputFile, "[^\\/]+$", "nessus_debug.txt")
+    Local $hDebug = FileOpen($sDebugFile, $FO_APPEND + $FO_UTF8_NOBOM)
+    If $hDebug = -1 Then Return
+    FileWriteLine($hDebug, "===== " & $sPath)
+    FileWriteLine($hDebug, String($oItem.xml))
+    FileWriteLine($hDebug, "")
+    FileClose($hDebug)
+    ConsoleWrite("  Debug: first finding written to " & $sDebugFile & @CRLF)
 EndFunc
 
 ; Space-separated list of an element's attribute names, for diagnostics.
