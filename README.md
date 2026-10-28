@@ -6,7 +6,7 @@ CSV file you can open in Excel, with one row per finding:
 
 | ip Address | vulnerability | severity |
 |------------|---------------|----------|
-| host name from `<ReportHost name="...">` | `pluginName` of each `<ReportItem>` | `severity` of that item |
+| `host-ip` tag of the `<ReportHost>`, or its `name` attribute | compliance check name for compliance scans, otherwise the `pluginName` of each `<ReportItem>` | `severity` of that item |
 
 ## Usage
 
@@ -40,6 +40,12 @@ summary also print to the command prompt.
   several findings came out with only one row and the rest were attributed to
   the wrong hosts. This port walks each `ReportHost` and emits every
   `ReportItem` beneath it with the correct host name.
+- The first column prefers the `host-ip` host property over the `ReportHost`
+  name attribute, which is often a hostname rather than an address.
+- In a compliance scan every result is filed under a single plugin such as
+  "Unix Compliance Checks", so the plugin name tells you nothing. For those
+  items the vulnerability column holds the individual check name from the
+  `cm:compliance-check-name` element instead.
 - Fields containing commas, quotes or line breaks are quoted per RFC 4180.
 - Files that fail to parse are skipped with a note on the console; the rest of
   the folder is still converted.

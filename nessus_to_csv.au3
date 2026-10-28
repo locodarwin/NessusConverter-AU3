@@ -117,11 +117,17 @@ Func _ConvertFile($sPath, $hCsv)
     If Not IsObj($oHosts) Then Return 0
     Local $bWarned = False
     For $oHost In $oHosts
-        Local $sIp = _NodeValue($oHost, "name", "HostProperties/tag[@name='host-ip']")
+        ; Prefer the scanned IP; the name attribute may be a hostname.
+        Local $sIp = _ChildText($oHost, "HostProperties/tag[@name='host-ip']")
+        If $sIp = "" Then $sIp = _NodeValue($oHost, "name")
         Local $oItems = $oHost.selectNodes("ReportItem")
         If Not IsObj($oItems) Then ContinueLoop
         For $oItem In $oItems
-            Local $sPlugin = _NodeValue($oItem, "pluginName", "plugin_name")
+            ; Compliance scans file every result under one plugin ("Unix
+            ; Compliance Checks" and the like); the useful name is the
+            ; individual check, held in a cm:compliance-check-name child.
+            Local $sPlugin = _ChildText($oItem, "*[local-name()='compliance-check-name']")
+            If $sPlugin = "" Then $sPlugin = _NodeValue($oItem, "pluginName", "plugin_name")
             If $sPlugin = "" And Not $bWarned Then
                 $bWarned = True
                 ConsoleWrite("  Warning: a ReportItem has no plugin name. Its attributes are: " & _
@@ -140,11 +146,16 @@ EndFunc
 ; the same name, then one at the alternate XPath. "" when none is present.
 Func _NodeValue($oNode, $sAttr, $sAltPath = "")
     Local $sValue = _Attr($oNode, $sAttr)
-    If $sValue <> "" Then Return $sValue
-    Local $oChild = $oNode.selectSingleNode($sAttr)
-    If Not IsObj($oChild) And $sAltPath <> "" Then $oChild = $oNode.selectSingleNode($sAltPath)
-    If IsObj($oChild) Then Return StringStripWS(String($oChild.text), 3)
-    Return ""
+    If $sValue = "" Then $sValue = _ChildText($oNode, $sAttr)
+    If $sValue = "" And $sAltPath <> "" Then $sValue = _ChildText($oNode, $sAltPath)
+    Return $sValue
+EndFunc
+
+; Trimmed text of the first node matching an XPath relative to $oNode, or "".
+Func _ChildText($oNode, $sPath)
+    Local $oChild = $oNode.selectSingleNode($sPath)
+    If Not IsObj($oChild) Then Return ""
+    Return StringStripWS(String($oChild.text), 3)
 EndFunc
 
 ; Space-separated list of an element's attribute names, for diagnostics.
