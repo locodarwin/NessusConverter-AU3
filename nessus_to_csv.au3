@@ -2,8 +2,10 @@
 #cs ---------------------------------------------------------------------------
     nessus_to_csv.au3
 
-    Converts every .nessus file in a directory into one CSV file with three
-    columns: ip Address, vulnerability, severity.
+    Converts every .nessus file in a directory into one CSV file with one row
+    per finding (ReportItem). The columns are the host's IP address and name
+    followed by every attribute and child element found on any finding in any
+    of the files, so nothing in the export is left out.
 
     AutoIt port of the Python script in https://github.com/levyjm/NessusConverter
 
@@ -17,9 +19,6 @@
                     the current user's Desktop (the original wrote to
                     /tmp/nessus_file.csv).
         /quiet      Skip the summary message box at the end.
-        /debug      Also write the raw XML of the first finding in each
-                    file to nessus_debug.txt beside the CSV, to help work
-                    out where a given export keeps its fields.
 
     Requires only a stock AutoIt install; XML parsing uses the MSXML COM
     object that ships with Windows.
@@ -31,8 +30,11 @@
 Global $g_sInputDir = @ScriptDir
 Global $g_sOutputFile = @DesktopDir & "\nessus_file.csv"
 Global $g_bQuiet = False
-Global $g_bDebug = False
 Global $g_iComError = 0
+
+; Column registry: name -> 0-based index, and the names in first-seen order.
+Global $g_oColumns = ObjCreate("Scripting.Dictionary")
+Global $g_aColumns[0]
 
 _ParseCommandLine()
 Exit _Main()
@@ -43,8 +45,6 @@ Func _ParseCommandLine()
         Local $sArg = $CmdLine[$i]
         If $sArg = "/quiet" Or $sArg = "/q" Then
             $g_bQuiet = True
-        ElseIf $sArg = "/debug" Then
-            $g_bDebug = True
         Else
             $iPositional += 1
             If $iPositional = 1 Then $g_sInputDir = $sArg
@@ -62,42 +62,79 @@ Func _Main()
     Local $oErr = ObjEvent("AutoIt.Error", "_ComErrorHandler")
     #forceref $oErr
 
+    If Not IsObj($g_oColumns) Then
+        _Report("Scripting.Dictionary is not available on this machine.")
+        Return 1
+    EndIf
     If Not FileExists($g_sInputDir) Then
         _Report("Input folder not found: " & $g_sInputDir)
         Return 1
     EndIf
 
-    Local $hCsv = FileOpen($g_sOutputFile, $FO_OVERWRITE + $FO_UTF8_NOBOM)
+    Local $aFiles = _ListNessusFiles($g_sInputDir)
+    If UBound($aFiles) = 0 Then
+        _Report("No .nessus files found in " & $g_sInputDir)
+        Return 1
+    EndIf
+
+    ; The two host columns always come first.
+    _ColumnIndex("ip Address")
+    _ColumnIndex("host")
+
+    ; Pass 1: learn the full column set from every finding in every file.
+    For $i = 0 To UBound($aFiles) - 1
+        ConsoleWrite("Scanning " & $aFiles[$i] & @CRLF)
+        Local $oXml = _LoadXml($g_sInputDir & "\" & $aFiles[$i])
+        If Not IsObj($oXml) Then ContinueLoop
+        Local $oItems = $oXml.selectNodes("//ReportHost/ReportItem")
+        If Not IsObj($oItems) Then ContinueLoop
+        For $oItem In $oItems
+            _RegisterColumns($oItem)
+        Next
+    Next
+
+    ; Pass 2: write the header and one row per finding.
+    ; UTF-8 with a byte order mark so Excel reads accented text correctly.
+    Local $hCsv = FileOpen($g_sOutputFile, $FO_OVERWRITE + $FO_UTF8)
     If $hCsv = -1 Then
         _Report("Could not open output file for writing: " & $g_sOutputFile)
         Return 1
     EndIf
-    FileWriteLine($hCsv, "ip Address,vulnerability,severity")
+    FileWriteLine($hCsv, _CsvRow($g_aColumns))
 
     Local $iFiles = 0, $iRows = 0
-    Local $hSearch = FileFindFirstFile($g_sInputDir & "\*.nessus")
-    If $hSearch <> -1 Then
-        While True
-            Local $sName = FileFindNextFile($hSearch)
-            If @error Then ExitLoop
-            If @extended Then ContinueLoop ; skip directories
-            $iFiles += 1
-            ConsoleWrite("Reading " & $sName & @CRLF)
-            $iRows += _ConvertFile($g_sInputDir & "\" & $sName, $hCsv)
-        WEnd
-        FileClose($hSearch)
-    EndIf
+    For $i = 0 To UBound($aFiles) - 1
+        ConsoleWrite("Converting " & $aFiles[$i] & @CRLF)
+        Local $oXml = _LoadXml($g_sInputDir & "\" & $aFiles[$i])
+        If Not IsObj($oXml) Then ContinueLoop
+        $iFiles += 1
+        $iRows += _WriteFindings($oXml, $hCsv)
+    Next
     FileClose($hCsv)
 
-    Local $sSummary = "Converted " & $iFiles & " .nessus file(s), " & $iRows & " row(s)." & @CRLF & _
-            "Output: " & $g_sOutputFile
-    If $iFiles = 0 Then $sSummary = "No .nessus files found in " & $g_sInputDir & @CRLF & $sSummary
-    _Report($sSummary)
+    _Report("Converted " & $iFiles & " .nessus file(s): " & $iRows & " finding(s), " & _
+            UBound($g_aColumns) & " columns." & @CRLF & "Output: " & $g_sOutputFile)
     Return 0
 EndFunc
 
-; Appends one CSV row per ReportItem in the file. Returns the number of rows written.
-Func _ConvertFile($sPath, $hCsv)
+; Names of the .nessus files in a folder, as a zero-based array.
+Func _ListNessusFiles($sDir)
+    Local $aFiles[0]
+    Local $hSearch = FileFindFirstFile($sDir & "\*.nessus")
+    If $hSearch = -1 Then Return $aFiles
+    While True
+        Local $sName = FileFindNextFile($hSearch)
+        If @error Then ExitLoop
+        If @extended Then ContinueLoop ; skip directories
+        ReDim $aFiles[UBound($aFiles) + 1]
+        $aFiles[UBound($aFiles) - 1] = $sName
+    WEnd
+    FileClose($hSearch)
+    Return $aFiles
+EndFunc
+
+; Parses a file into an MSXML document. Returns the document, or 0 on failure.
+Func _LoadXml($sPath)
     Local $oXml = ObjCreate("Msxml2.DOMDocument.6.0")
     If Not IsObj($oXml) Then $oXml = ObjCreate("Microsoft.XMLDOM")
     If Not IsObj($oXml) Then
@@ -109,7 +146,6 @@ Func _ConvertFile($sPath, $hCsv)
     $oXml.validateOnParse = False
     $oXml.resolveExternals = False
     $oXml.setProperty("SelectionLanguage", "XPath")
-    $oXml.setProperty("SelectionNamespaces", "xmlns:cm='http://www.nessus.org/cm'")
 
     $g_iComError = 0
     If Not $oXml.load($sPath) Or $g_iComError Then
@@ -118,47 +154,89 @@ Func _ConvertFile($sPath, $hCsv)
         ConsoleWrite("  Skipped, could not parse XML. " & StringStripWS($sReason, 3) & @CRLF)
         Return 0
     EndIf
+    Return $oXml
+EndFunc
 
+; Adds a column for each attribute and child element of a finding.
+Func _RegisterColumns($oItem)
+    For $oAttr In $oItem.attributes
+        _ColumnIndex($oAttr.name)
+    Next
+    For $oChild In $oItem.childNodes
+        If $oChild.nodeType = 1 Then _ColumnIndex($oChild.nodeName)
+    Next
+EndFunc
+
+; Index of a named column, creating it at the end if it is new.
+Func _ColumnIndex($sName)
+    If $g_oColumns.Exists($sName) Then Return $g_oColumns.Item($sName)
+    Local $iIndex = UBound($g_aColumns)
+    ReDim $g_aColumns[$iIndex + 1]
+    $g_aColumns[$iIndex] = $sName
+    $g_oColumns.Add($sName, $iIndex)
+    Return $iIndex
+EndFunc
+
+; Writes one CSV row per ReportItem in the document. Returns the row count.
+Func _WriteFindings($oXml, $hCsv)
     Local $iRows = 0
     Local $oHosts = $oXml.selectNodes("//ReportHost")
     If Not IsObj($oHosts) Then Return 0
-    Local $bWarned = False
+    Local $aRow
     For $oHost In $oHosts
-        ; Prefer the scanned IP; the name attribute may be a hostname.
+        Local $sHost = _Attr($oHost, "name")
+        ; Prefer the scanned IP; the name attribute is often a hostname.
         Local $sIp = _ChildText($oHost, "HostProperties/tag[@name='host-ip']")
-        If $sIp = "" Then $sIp = _NodeValue($oHost, "name")
+        If $sIp = "" Then $sIp = $sHost
         Local $oItems = $oHost.selectNodes("ReportItem")
         If Not IsObj($oItems) Then ContinueLoop
         For $oItem In $oItems
-            ; Compliance scans file every result under one plugin ("Unix
-            ; Compliance Checks" and the like); the useful name is the
-            ; individual check, held in a cm:compliance-check-name child.
-            If $g_bDebug And $iRows = 0 Then _DebugDump($sPath, $oItem)
-            Local $sPlugin = _ChildText($oItem, "cm:compliance-check-name")
-            If $sPlugin = "" Then $sPlugin = _ChildText($oItem, "*[local-name()='compliance-check-name']")
-            If $sPlugin = "" Then $sPlugin = _DescriptionTitle(_ChildText($oItem, "description"))
-            If $sPlugin = "" Then $sPlugin = _NodeValue($oItem, "pluginName", "plugin_name")
-            If $sPlugin = "" And Not $bWarned Then
-                $bWarned = True
-                ConsoleWrite("  Warning: a ReportItem has no plugin name. Its attributes are: " & _
-                        _AttrNames($oItem) & @CRLF)
-            EndIf
-            FileWriteLine($hCsv, _CsvField($sIp) & "," & _
-                    _CsvField($sPlugin) & "," & _
-                    _CsvField(_NodeValue($oItem, "severity")))
+            $aRow = _NewRow()
+            $aRow[0] = $sIp
+            $aRow[1] = $sHost
+            For $oAttr In $oItem.attributes
+                _SetCell($aRow, $oAttr.name, $oAttr.value)
+            Next
+            For $oChild In $oItem.childNodes
+                If $oChild.nodeType = 1 Then _SetCell($aRow, $oChild.nodeName, $oChild.text)
+            Next
+            FileWriteLine($hCsv, _CsvRow($aRow))
             $iRows += 1
         Next
     Next
     Return $iRows
 EndFunc
 
-; Reads a value from a node: the attribute first, then a child element with
-; the same name, then one at the alternate XPath. "" when none is present.
-Func _NodeValue($oNode, $sAttr, $sAltPath = "")
-    Local $sValue = _Attr($oNode, $sAttr)
-    If $sValue = "" Then $sValue = _ChildText($oNode, $sAttr)
-    If $sValue = "" And $sAltPath <> "" Then $sValue = _ChildText($oNode, $sAltPath)
-    Return $sValue
+; An empty row with one cell per known column.
+Func _NewRow()
+    Local $aRow[UBound($g_aColumns)]
+    For $i = 0 To UBound($aRow) - 1
+        $aRow[$i] = ""
+    Next
+    Return $aRow
+EndFunc
+
+; Stores a value in the named column. Repeated elements such as several
+; <cve> entries on one finding are joined with "; " in the one cell.
+Func _SetCell(ByRef $aRow, $sName, $vValue)
+    Local $sValue = StringStripWS(String($vValue), 3)
+    If $sValue = "" Then Return
+    Local $iIndex = _ColumnIndex($sName)
+    If $iIndex >= UBound($aRow) Then ReDim $aRow[$iIndex + 1]
+    If $aRow[$iIndex] = "" Then
+        $aRow[$iIndex] = $sValue
+    Else
+        $aRow[$iIndex] &= "; " & $sValue
+    EndIf
+EndFunc
+
+; Reads an attribute as a string, "" when it is absent.
+Func _Attr($oNode, $sName)
+    Local $vValue = $oNode.getAttribute($sName)
+    If IsString($vValue) Or IsNumber($vValue) Then Return String($vValue)
+    Local $oAttr = $oNode.attributes.getNamedItem($sName)
+    If IsObj($oAttr) Then Return String($oAttr.text)
+    Return ""
 EndFunc
 
 ; Trimmed text of the first node matching an XPath relative to $oNode, or "".
@@ -168,45 +246,14 @@ Func _ChildText($oNode, $sPath)
     Return StringStripWS(String($oChild.text), 3)
 EndFunc
 
-; Compliance descriptions open with the check title in quotes, as in
-; "1.1.1 Ensure ..." : [FAILED] ...   Returns that title, or "".
-Func _DescriptionTitle($sDescription)
-    Local $aMatch = StringRegExp($sDescription, '^\s*"([^"]+)"\s*:', 1)
-    If @error Then Return ""
-    Return StringStripWS($aMatch[0], 3)
-EndFunc
-
-; Appends the raw XML of one ReportItem to nessus_debug.txt beside the CSV.
-Func _DebugDump($sPath, $oItem)
-    Local $sDebugFile = StringRegExpReplace($g_sOutputFile, "[^\\/]+$", "nessus_debug.txt")
-    Local $hDebug = FileOpen($sDebugFile, $FO_APPEND + $FO_UTF8_NOBOM)
-    If $hDebug = -1 Then Return
-    FileWriteLine($hDebug, "===== " & $sPath)
-    FileWriteLine($hDebug, String($oItem.xml))
-    FileWriteLine($hDebug, "")
-    FileClose($hDebug)
-    ConsoleWrite("  Debug: first finding written to " & $sDebugFile & @CRLF)
-EndFunc
-
-; Space-separated list of an element's attribute names, for diagnostics.
-Func _AttrNames($oNode)
-    Local $sList = ""
-    For $oAttr In $oNode.attributes
-        $sList &= $oAttr.name & " "
+; Joins an array of cells into one CSV line.
+Func _CsvRow(ByRef $aCells)
+    Local $sLine = ""
+    For $i = 0 To UBound($aCells) - 1
+        If $i > 0 Then $sLine &= ","
+        $sLine &= _CsvField($aCells[$i])
     Next
-    If $sList = "" Then Return "(none)"
-    Return StringStripWS($sList, 2)
-EndFunc
-
-; Reads an attribute as a string, "" when it is absent.
-Func _Attr($oNode, $sName)
-    Local $vValue = $oNode.getAttribute($sName)
-    If IsString($vValue) Or IsNumber($vValue) Then Return String($vValue)
-    ; Some MSXML/AutoIt pairings hand back a variant AutoIt cannot type;
-    ; go through the attribute collection instead.
-    Local $oAttr = $oNode.attributes.getNamedItem($sName)
-    If IsObj($oAttr) Then Return String($oAttr.text)
-    Return ""
+    Return $sLine
 EndFunc
 
 ; Quotes a field when it holds a comma, quote or line break, per RFC 4180.
